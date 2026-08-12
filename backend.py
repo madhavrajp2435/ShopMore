@@ -1,124 +1,164 @@
 import os
 import base64
+import json
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import OpenAI
+from fastapi.responses import FileResponse
+from google import genai
 
 
-# --------------------------------------------------
+# ============================================================
 # LOAD ENVIRONMENT VARIABLES
-# --------------------------------------------------
+# ============================================================
 
 load_dotenv()
 
-API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not API_KEY:
+if not GEMINI_API_KEY:
     raise RuntimeError(
-        "OPENAI_API_KEY is missing. "
-        "Please add it to your .env file."
+        "GEMINI_API_KEY is missing. "
+        "Add it to Render Environment Variables."
     )
 
 
-# --------------------------------------------------
-# OPENAI CLIENT
-# --------------------------------------------------
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
 
-client = OpenAI(api_key=API_KEY)
+client = genai.Client(
+    api_key=GEMINI_API_KEY
+)
 
 
-# --------------------------------------------------
-# CREATE FASTAPI APP
-# --------------------------------------------------
+# ============================================================
+# FASTAPI APP
+# ============================================================
 
 app = FastAPI(
     title="ShopMore API",
     description="AI product identification backend for ShopMore",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 
-# --------------------------------------------------
+# ============================================================
 # CORS
-# Allows the ShopMore frontend to communicate
-# with this Python backend.
-# --------------------------------------------------
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# --------------------------------------------------
-# HOME / TEST ROUTE
-# --------------------------------------------------
+# ============================================================
+# HOME
+# ============================================================
 
 @app.get("/")
 def home():
+
+    return FileResponse("index.html")
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.get("/health")
+def health():
+
     return {
         "status": "online",
         "message": "ShopMore backend is running!"
     }
 
 
-# --------------------------------------------------
+# ============================================================
+# STATIC FILES
+# ============================================================
+
+@app.get("/style.css")
+def style():
+
+    return FileResponse("style.css")
+
+
+@app.get("/script.js")
+def script():
+
+    return FileResponse("script.js")
+
+
+# ============================================================
 # IMAGE ANALYSIS
-# --------------------------------------------------
+# ============================================================
 
 @app.post("/analyze-image")
-async def analyze_image(file: UploadFile = File(...)):
+async def analyze_image(
+    file: UploadFile = File(...)
+):
 
-    # Check whether the uploaded file is an image
+    # --------------------------------------------------------
+    # CHECK FILE TYPE
+    # --------------------------------------------------------
+
     if not file.content_type:
+
         raise HTTPException(
             status_code=400,
             detail="File type could not be detected."
         )
 
+
     if not file.content_type.startswith("image/"):
+
         raise HTTPException(
             status_code=400,
             detail="Please upload an image file."
         )
 
 
-    # Read image
+    # --------------------------------------------------------
+    # READ IMAGE
+    # --------------------------------------------------------
+
     image_bytes = await file.read()
 
 
-    # Check empty image
     if not image_bytes:
+
         raise HTTPException(
             status_code=400,
             detail="The uploaded image is empty."
         )
 
 
-    # --------------------------------------------------
-    # Convert image into Base64
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # CONVERT IMAGE TO BASE64
+    # --------------------------------------------------------
 
     image_base64 = base64.b64encode(
         image_bytes
     ).decode("utf-8")
 
 
-    # --------------------------------------------------
-    # AI INSTRUCTIONS
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # PROMPT
+    # --------------------------------------------------------
 
     prompt = """
 You are the product identification engine for ShopMore.
 
 Analyze the uploaded product image carefully.
 
-Your job is to identify the product as accurately as possible.
+Identify the product as accurately as possible.
 
 Look for:
 
@@ -129,7 +169,7 @@ Look for:
 - Variant
 - Color
 - Visible specifications
-- Any text visible on the product or packaging
+- Text visible on the product or packaging
 
 IMPORTANT:
 
@@ -138,7 +178,7 @@ Do NOT invent a model number or specification.
 If something cannot be identified from the image,
 leave that field empty.
 
-Create a useful shopping search query that could be
+Create a useful shopping search query that can be
 used to find this exact product online.
 
 Return ONLY valid JSON.
@@ -146,108 +186,136 @@ Return ONLY valid JSON.
 Use exactly this structure:
 
 {
-    "brand": "",
-    "product_name": "",
-    "model": "",
-    "category": "",
-    "variant": "",
-    "color": "",
-    "search_query": "",
-    "confidence": 0
+  "brand": "",
+  "product_name": "",
+  "model": "",
+  "category": "",
+  "variant": "",
+  "color": "",
+  "search_query": "",
+  "confidence": 0
 }
 
 The confidence value must be between 0 and 100.
-
-Examples:
-
-If the image contains Sony headphones:
-
-{
-    "brand": "Sony",
-    "product_name": "WH-1000XM5",
-    "model": "WH-1000XM5",
-    "category": "Headphones",
-    "variant": "Wireless Noise Cancelling",
-    "color": "Black",
-    "search_query": "Sony WH-1000XM5 Black Wireless Noise Cancelling Headphones",
-    "confidence": 96
-}
-
-If the exact model cannot be determined,
-identify the closest product possible and lower the confidence.
 """
 
 
-    # --------------------------------------------------
-    # SEND IMAGE TO AI
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # SEND IMAGE TO GEMINI
+    # --------------------------------------------------------
 
     try:
 
-        response = client.responses.create(
-            model="gpt-5.6",
+        response = client.models.generate_content(
 
-            input=[
+            model="gemini-2.5-flash",
+
+            contents=[
                 {
-                    "role": "user",
-
-                    "content": [
-
-                        {
-                            "type": "input_text",
-                            "text": prompt
-                        },
-
-                        {
-                            "type": "input_image",
-                            "image_url": (
-                                f"data:{file.content_type};"
-                                f"base64,{image_base64}"
-                            )
-                        }
-
-                    ]
-                }
+                    "inline_data": {
+                        "mime_type": file.content_type,
+                        "data": image_base64
+                    }
+                },
+                prompt
             ]
         )
 
 
-        # Get AI response
-        ai_result = response.output_text
+        # ----------------------------------------------------
+        # GET GEMINI RESPONSE
+        # ----------------------------------------------------
+
+        ai_result = response.text
 
 
-        # --------------------------------------------------
-        # RETURN RESULT TO FRONTEND
-        # --------------------------------------------------
+        # ----------------------------------------------------
+        # CLEAN POSSIBLE MARKDOWN
+        # ----------------------------------------------------
+
+        ai_result = ai_result.strip()
+
+
+        if ai_result.startswith("```json"):
+
+            ai_result = ai_result[
+                7:
+            ].strip()
+
+
+        if ai_result.startswith("```"):
+
+            ai_result = ai_result[
+                3:
+            ].strip()
+
+
+        if ai_result.endswith("```"):
+
+            ai_result = ai_result[
+                :-3
+            ].strip()
+
+
+        # ----------------------------------------------------
+        # VALIDATE JSON
+        # ----------------------------------------------------
+
+        try:
+
+            parsed_result = json.loads(
+                ai_result
+            )
+
+        except json.JSONDecodeError:
+
+            parsed_result = {
+                "brand": "",
+                "product_name": "",
+                "model": "",
+                "category": "",
+                "variant": "",
+                "color": "",
+                "search_query": ai_result,
+                "confidence": 0
+            }
+
+
+        # ----------------------------------------------------
+        # RETURN TO FRONTEND
+        # ----------------------------------------------------
 
         return {
+
             "success": True,
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "analysis": ai_result
+
+            "filename":
+                file.filename,
+
+            "content_type":
+                file.content_type,
+
+            "analysis":
+                json.dumps(
+                    parsed_result
+                )
+
         }
 
 
     except Exception as error:
 
-        print("AI ERROR:", error)
-
-        raise HTTPException(
-            status_code=500,
-            detail=f"AI analysis failed: {str(error)}"
+        print(
+            "GEMINI ERROR:",
+            error
         )
 
 
-# --------------------------------------------------
-# RUNNING NOTE
-# --------------------------------------------------
-#
-# Start this server from the ShopMore folder with:
-#
-# uvicorn backend:app --reload
-#
-# Then open:
-#
-# http://127.0.0.1:8000
-#
-# --------------------------------------------------
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=
+                f"AI analysis failed: {str(error)}"
+
+        )
