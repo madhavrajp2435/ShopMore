@@ -208,7 +208,7 @@ The confidence value must be between 0 and 100.
 
         response = client.models.generate_content(
 
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
 
             contents=[
                 {
